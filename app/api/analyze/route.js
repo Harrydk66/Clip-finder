@@ -1,15 +1,11 @@
 const KICK_HOSTS=new Set(["kick.com","www.kick.com"]);
 function parseVod(raw){try{const u=new URL(raw);if(!KICK_HOSTS.has(u.hostname))return null;const m=u.pathname.match(/^\/([^/]+)\/videos\/([0-9a-fA-F-]{36})\/?$/);if(!m)return null;return{creator:m[1],videoId:m[2],url:u.toString()}}catch{return null}}
-function pick(obj,keys){for(const k of keys){if(obj?.[k]!=null)return obj[k]}return null}
-export async function POST(req){
- const body=await req.json().catch(()=>({}));const vod=parseVod(body.url||"");
- if(!vod)return Response.json({ok:false,error:"Cole um link válido de VOD da Kick."},{status:400});
- try{
-  const r=await fetch(`https://kick.com/api/v1/video/${vod.videoId}`,{headers:{Accept:"application/json","User-Agent":"Mozilla/5.0"},cache:"no-store"});
-  if(!r.ok)throw new Error("Kick não liberou os dados deste VOD.");
-  const d=await r.json();
-  const source=pick(d,["source","playback_url","url"])||pick(d?.video,["source","playback_url","url"]);
-  const meta={title:pick(d,["livestream_title","session_title","title"])||pick(d?.livestream,["session_title","title"]),createdAt:pick(d,["created_at","start_time"]),duration:pick(d,["duration","duration_ms"]),views:pick(d,["views","view_count"]),thumbnail:pick(d,["thumbnail","thumbnail_url"])};
-  return Response.json({ok:true,vod,meta,sourceAvailable:Boolean(source),status:source?"ready":"metadata-only",message:source?"VOD acessível. Fonte de mídia encontrada; pronto para gerar sinais de momentos.":"Metadados encontrados, mas a fonte de mídia não foi exposta."});
- }catch(e){return Response.json({ok:false,error:e.message||"Não foi possível consultar o VOD."},{status:502})}
-}
+function fmt(s){s=Math.max(0,Math.floor(s));return [Math.floor(s/3600),Math.floor(s%3600/60),s%60].map((v,i)=>i?String(v).padStart(2,"0"):String(v)).join(":")}
+function parseMaster(txt,base){const lines=txt.split(/\r?\n/);const q=[];for(let i=0;i<lines.length;i++){if(lines[i].startsWith("#EXT-X-STREAM-INF")){const bw=Number((lines[i].match(/BANDWIDTH=(\d+)/)||[])[1]||0);const next=lines.slice(i+1).find(x=>x&& !x.startsWith("#"));if(next)q.push({bw,url:new URL(next,base).toString()})}}return q.sort((a,b)=>a.bw-b.bw)}
+function durationFromPlaylist(txt){let total=0;for(const m of txt.matchAll(/#EXTINF:([\d.]+)/g))total+=Number(m[1]);return total}
+function candidateWindows(duration){if(!duration)return[];const step=Math.max(300,Math.floor(duration/24));const out=[];for(let t=Math.floor(step/2);t<duration;t+=step)out.push({timestamp:fmt(t),seconds:t,score:null,label:"Amostra para análise"});return out.slice(0,24)}
+export async function POST(req){const body=await req.json().catch(()=>({}));const vod=parseVod(body.url||"");if(!vod)return Response.json({ok:false,error:"Cole um link válido de VOD da Kick."},{status:400});
+try{const r=await fetch(`https://kick.com/api/v1/video/${vod.videoId}`,{headers:{Accept:"application/json","User-Agent":"Mozilla/5.0"},cache:"no-store"});if(!r.ok)throw new Error("Kick não liberou os dados deste VOD.");const d=await r.json();const source=d.source||d?.video?.source;if(!source)throw new Error("A Kick não expôs a fonte de mídia deste VOD.");
+let duration=Number(d.duration||0);let variant=null;try{const mr=await fetch(source,{cache:"no-store"});const master=await mr.text();const variants=parseMaster(master,source);variant=variants[0]?.url||source;const vr=await fetch(variant,{cache:"no-store"});const playlist=await vr.text();duration=duration||durationFromPlaylist(playlist)}catch{}
+const candidates=candidateWindows(duration);return Response.json({ok:true,vod,meta:{title:d?.livestream?.session_title||d.title||null,durationSeconds:duration,duration:duration?fmt(duration):null},media:{sourceAvailable:true,analysisVariantAvailable:Boolean(variant)},candidates,status:"indexed",message:candidates.length?`VOD indexado em ${candidates.length} pontos. Próximo motor vai pontuar fala, reação e contexto.`:"Fonte encontrada; duração ainda não pôde ser indexada."});
+}catch(e){return Response.json({ok:false,error:e.message||"Não foi possível consultar o VOD."},{status:502})}}
