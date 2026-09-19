@@ -1,0 +1,1 @@
+import "./globals.css";export const metadata={title:"Clip Finder",description:"Encontre momentos de VODs para cortes"};export default function RootLayout({children}){return <html lang="pt-BR"><body>{children}</body></html>}
