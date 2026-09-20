@@ -1,0 +1,2 @@
+import{createJob}from"../../../lib/jobs";
+export async function POST(req){try{const{url}=await req.json();const u=new URL(url);const m=u.pathname.match(/^\/([^/]+)\/videos\/([0-9a-fA-F-]{36})\/?$/);if(!["kick.com","www.kick.com"].includes(u.hostname)||!m)return Response.json({ok:false,error:"VOD da Kick inválido."},{status:400});const job=await createJob({vod_url:u.toString(),creator:m[1],video_id:m[2],status:"queued",progress:0,stage:"Na fila"});return Response.json({ok:true,job})}catch(e){return Response.json({ok:false,error:e.message},{status:500})}}
