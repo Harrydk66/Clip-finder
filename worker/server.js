@@ -1,11 +1,11 @@
-import{execFile}from"node:child_process";import{promisify}from"node:util";const execFileAsync=promisify(execFile);
+import{timingSafeEqual}from"node:crypto";import{execFile}from"node:child_process";import{promisify}from"node:util";const execFileAsync=promisify(execFile);
 let ffmpegBusy=false;async function withFfmpeg(fn){while(ffmpegBusy)await new Promise(r=>setTimeout(r,100));ffmpegBusy=true;try{return await fn()}finally{ffmpegBusy=false}}
 async function ffmpeg(args,{timeout=45000,maxBuffer=8*1024*1024,encoding="buffer"}={}){return withFfmpeg(()=>execFileAsync("ffmpeg",["-rw_timeout","15000000",...args],{timeout,killSignal:"SIGKILL",maxBuffer,encoding}))}
 import express from"express";const app=express();app.use(express.json({limit:"256kb"}));
 const WORKER_SECRET=process.env.WORKER_SECRET||"";
 process.on("unhandledRejection",err=>console.error("[V7 unhandledRejection]",err));
 process.on("uncaughtException",err=>console.error("[V7 uncaughtException]",err));
-function safeEq(a,b){if(!a||!b||a.length!==b.length)return false;return crypto.timingSafeEqual(Buffer.from(a),Buffer.from(b))}
+function safeEq(a,b){if(!a||!b||a.length!==b.length)return false;return timingSafeEqual(Buffer.from(a),Buffer.from(b))}
 function requireWorkerAuth(req,res,next){if(!WORKER_SECRET)return res.status(503).json({ok:false,error:"WORKER_SECRET não configurado"});const token=String(req.headers.authorization||"").replace(/^Bearer\s+/i,"");if(!safeEq(token,WORKER_SECRET))return res.status(401).json({ok:false,error:"Não autorizado"});next()}
 app.get("/health",(_,res)=>res.json({ok:true,service:"clip-finder-worker",version:"V7.0"}));
 app.use((req,res,next)=>req.path==="/health"?next():requireWorkerAuth(req,res,next));
