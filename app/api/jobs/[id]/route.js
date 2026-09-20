@@ -1,0 +1,2 @@
+import{getJob}from"../../../../lib/jobs";
+export async function GET(_req,{params}){try{const{id}=await params;const job=await getJob(id);if(!job)return Response.json({ok:false,error:"Análise não encontrada."},{status:404});return Response.json({ok:true,job})}catch(e){return Response.json({ok:false,error:e.message},{status:500})}}
