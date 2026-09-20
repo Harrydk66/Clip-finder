@@ -8,8 +8,8 @@ process.on("uncaughtException",err=>console.error("[V7 uncaughtException]",err))
 function safeEq(a,b){if(!a||!b||a.length!==b.length)return false;return timingSafeEqual(Buffer.from(a),Buffer.from(b))}
 function requireWorkerAuth(req,res,next){if(!WORKER_SECRET)return res.status(503).json({ok:false,error:"WORKER_SECRET não configurado"});const token=String(req.headers.authorization||"").replace(/^Bearer\s+/i,"");if(!safeEq(token,WORKER_SECRET))return res.status(401).json({ok:false,error:"Não autorizado"});next()}
 app.get("/health",(_,res)=>res.json({ok:true,service:"clip-finder-worker",version:"V7.0"}));
-app.post("/jobs/recover",async(_,res)=>{try{const jobs=await findStaleJobs();res.json({ok:true,found:jobs.length,jobs:jobs.map(x=>({id:x.id,status:x.status,updated_at:x.updated_at}))});setImmediate(()=>recoverStaleJobs().catch(e=>console.error("[V7 recovery]",e)))}catch(e){res.status(500).json({ok:false,error:e.message})}});
 app.use((req,res,next)=>req.path==="/health"?next():requireWorkerAuth(req,res,next));
+app.post("/jobs/recover",async(_,res)=>{try{const jobs=await findStaleJobs();res.json({ok:true,found:jobs.length});setImmediate(()=>recoverStaleJobs().catch(e=>console.error("[V7 recovery]",e)))}catch(e){res.status(500).json({ok:false,error:e.message})}});
 function sb(){return{url:process.env.SUPABASE_URL,key:process.env.SUPABASE_SERVICE_ROLE_KEY}}
 async function patchJob(id,patch){const{url,key}=sb();if(!url||!key)throw new Error("Supabase não configurado no worker");const r=await fetch(url+"/rest/v1/analysis_jobs?id=eq."+encodeURIComponent(id),{method:"PATCH",headers:{apikey:key,Authorization:"Bearer "+key,"Content-Type":"application/json",Prefer:"return=representation"},body:JSON.stringify({...patch,updated_at:new Date().toISOString()}),signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error("Supabase: "+await r.text());return r.json()}
 
