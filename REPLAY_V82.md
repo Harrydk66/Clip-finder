@@ -18,7 +18,7 @@ keep the saved progress. No migration or transcript rewrite is required.
 ## Deployment and retry
 
 1. Confirm Railway and Vercel have deployed the fix commit. The worker's public
-   `/health` must report `V8.2-replay-safe-1` and its `RAILWAY_GIT_COMMIT_SHA`.
+   `/health` must report `V8.2-evidence-2` and its `RAILWAY_GIT_COMMIT_SHA`.
 2. Refresh the existing analysis and select **Retomar replay V8.2**. Do not create
    another analysis. Legacy failed jobs with the exact golden-map error also
    qualify even if their stage label was overwritten.
@@ -43,3 +43,9 @@ hits/misses, completion to 100%, failed replay retry, generic resume, automatic
 recovery, failure preservation, and health identity. Network requests are
 allowlisted by the test fixture; transcript writes and candidate deletion fail
 the tests. These tests do not execute the user's production VOD.
+
+## Evidence preservation update
+
+Ranking now normalizes both flat visual responses and frame arrays. Missing or failed vision is unavailable, and numeric zero scores remain zero. Understanding requests a chronological evidence sequence; only quotes found in the claimed saved transcript segment enter that sequence. Segment times are not word-level timestamps. Ranking receives at most two nearby candidate contexts within ten minutes, explicitly marked as unconfirmed relationships, without merging candidates or forcing benchmark hits. Trace payloads now retain ranking reasons and candidate boundaries.
+
+Nine isolated regression tests pass. An offline check against the user-provided export confirms that nested video/reaction evidence now reaches the ranking input. No production replay or paid model evaluation was run for this update; ranking quality and quote recall still require a subsequent controlled evaluation. Longer evidence inputs can increase ranking token usage.

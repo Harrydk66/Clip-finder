@@ -94,5 +94,34 @@ test('Next PUT accepts failed replay, rejects unrelated failure, and reaches wor
 
 test('health identifies deployed fix and commit',()=>{
   const h=harness(),res=response();h.routes.get('/health')(null,res);
-  assert.equal(res.body.version,'V8.2-replay-safe-1');assert.equal(res.body.commit,'test-sha');
+  assert.equal(res.body.version,'V8.2-evidence-2');assert.equal(res.body.commit,'test-sha');
+});
+
+
+test('frame arrays reach ranking and absent or failed vision stays unavailable',()=>{
+ const {context:c}=harness();
+ const visual=c.cardForRanking({visual_evidence:{frames:[{mediaOnScreen:true,reactionVisible:true,externalMediaType:'video_clip',description:'Vídeo na tela'},{mediaOnScreen:false,reactionVisible:true,description:'Reação'}]}},0).visualEvidence;
+ assert.equal(visual.mediaOnScreen,true);assert.equal(visual.reactionVisible,true);assert.equal(visual.externalMediaType,'video_clip');assert.match(visual.description,/Vídeo/);
+ assert.equal(c.cardForRanking({},0).visualEvidence.available,false);
+ assert.equal(c.normalizeVisualEvidence({available:false,frames:[{mediaOnScreen:true}]}).available,false);
+ assert.equal(c.normalizeVisualEvidence({mediaOnScreen:'false'}).available,false);
+ assert.equal(c.normalizeVisualEvidence({mediaOnScreen:false,description:'Sem mídia'}).mediaOnScreen,false);
+});
+
+test('narrative quotes must occur in the claimed saved transcript segment',()=>{
+ const {context:c}=harness(),chunks=[{transcript_segments:[{start_seconds:100,end_seconds:220,text:'Não fui eu. Mostra a prova. Aqui está o vídeo.'}]}];
+ const out=c.groundedNarrative(chunks,{peak_seconds:200},[{startSeconds:100,quote:'Mostra a prova.'},{startSeconds:100,quote:'Inventado'},{startSeconds:101,quote:'Aqui está o vídeo.'}]);
+ assert.equal(out.length,1);assert.equal(out[0].quote,'Mostra a prova.');assert.equal(out[0].endSeconds,220);
+ assert.equal(c.groundedNarrative(chunks,{peak_seconds:2000},[{startSeconds:100,quote:'Mostra a prova.'}]).length,0);
+});
+
+test('global ranking receives bounded neighboring evidence and preserves a zero score',async()=>{
+ const h=harness();let request;
+ h.context.fetch=async(_url,options)=>{request=JSON.parse(options.body);return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({order:[{id:0,score:0,reason:'Sem valor'},{id:1,score:50}]})}}]})}};
+ const events=[{peak_seconds:200,arc_id:'a',score:80,clip_card:{narrativeEvidence:[{startSeconds:100,quote:'Mostra a prova.'}]}},{peak_seconds:300,arc_id:'b',summary:'Consequência'}];
+ const result=await h.context.globalRerank(events);
+ assert.equal(result[0].score,0);
+ const prompt=request.messages[0].content,cards=JSON.parse(prompt.split('CANDIDATOS: ')[1]);
+ assert.equal(cards[0].narrativeEvidence[0].quote,'Mostra a prova.');assert.equal(cards[0].nearbyContext[0].sameArc,false);assert.equal(cards[0].nearbyContext[0].peakSeconds,300);
+ assert.equal(h.context.rankingContext(events[0],[events[0],{peak_seconds:5000}]).length,0);
 });
