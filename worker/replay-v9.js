@@ -68,7 +68,8 @@ export async function runExperiment(snapshot,{model='gpt-4o-mini',cache={},save=
       'Unknown axes remain null; clipWorthiness is a partial-evidence score, not a probability.']};
   await save(result);
   try {
-    result.ranked = await rerank(snapshot,{model,cache,judge,apiKey,onCheckpoint:async()=>save(result)});
+    result.ranked = await rerank(snapshot,{model,cache,judge,apiKey,onCheckpoint:async()=>save(result),
+      onCoverage:async coverage=>{result.coverage=coverage;await save(result);}});
     result.review = reviewTemplate(snapshot,result.ranked);
     result.metrics = acceptance(snapshot,result.ranked,result.review);
     result.status = 'completed';

@@ -55,7 +55,7 @@ export function judgeInput(candidate, chunks) {
       [{start_seconds:chunk.start_seconds,end_seconds:chunk.end_seconds,text:chunk.transcript}];
     for (const s of items) {
       const a = Number(s.start_seconds), b = Number(s.end_seconds);
-      if (!number(s.start_seconds) || !number(s.end_seconds) || b <= a || b <= start || a >= end || !s.text) continue;
+      if (!number(s.start_seconds) || !number(s.end_seconds) || b <= a || b <= start || a >= end || !String(s.text || '').trim()) continue;
       const signature = hash([a,b,s.text]);
       if (seen.has(signature)) continue;
       seen.add(signature);
@@ -64,7 +64,15 @@ export function judgeInput(candidate, chunks) {
     }
   }
   segments.sort((a,b)=>a.startSeconds-b.startSeconds || a.endSeconds-b.endSeconds);
-  if (!segments.length) throw new Error('Sem transcrição salva para ' + candidate.key);
+  if (!segments.length) {
+    const bounds = chunks.flatMap(c=>c.transcript_segments?.length ? c.transcript_segments : [c])
+      .filter(s=>number(s.start_seconds) && number(s.end_seconds) && String(s.text || s.transcript || '').trim());
+    throw Object.assign(new Error('Sem transcrição salva para ' + candidate.key),{
+      code:'MISSING_SAVED_TRANSCRIPT',details:{startSeconds:start,endSeconds:end,
+        savedTextStart:bounds.length ? Math.min(...bounds.map(s=>Number(s.start_seconds))) : null,
+        savedTextEnd:bounds.length ? Math.max(...bounds.map(s=>Number(s.end_seconds))) : null}
+    });
+  }
   // Old scores, names, reasons and inferred clip-card features do not anchor the judge.
   const visual = candidate.visual_evidence || {};
   const visualSources = visual.available === false ? [] : [visual,...(Array.isArray(visual.frames)?visual.frames:[])];
@@ -120,10 +128,20 @@ export async function callJudge(input, {model, apiKey, fetchImpl=fetch}) {
   return {judgment,usage:body.usage || null,responseModel:body.model || model};
 }
 
-export async function rerank(snapshot, {model='gpt-4o-mini',cache={},judge=callJudge,onCheckpoint=async()=>{},apiKey}={}) {
+export async function rerank(snapshot, {model='gpt-4o-mini',cache={},judge=callJudge,onCheckpoint=async()=>{},onCoverage=async()=>{},apiKey}={}) {
   if (!snapshot.candidates?.length || snapshot.candidates.length > 60) throw new Error('Pool V9 deve ter 1..60 candidatos');
   if (new Set(snapshot.candidates.map(c=>c.key)).size !== snapshot.candidates.length) throw new Error('Candidatos duplicados');
-  const prepared = snapshot.candidates.map(c=>({candidate:c,input:judgeInput(c,snapshot.chunks)}));
+  const prepared = [], unavailable = [];
+  for (const c of snapshot.candidates) {
+    try { prepared.push({candidate:c,input:judgeInput(c,snapshot.chunks)}); }
+    catch (error) {
+      if (error.code !== 'MISSING_SAVED_TRANSCRIPT') throw error;
+      // Missing input is not a negative editorial verdict and never invokes the LLM.
+      unavailable.push({key:c.key,oldRank:c.oldRank,startSeconds:c.start_seconds,endSeconds:c.end_seconds,
+        reason:error.code,details:error.details,decision:null,clipWorthiness:null});
+    }
+  }
+  await onCoverage({total:snapshot.candidates.length,eligible:prepared.length,unavailable});
   const evaluated = [];
   for (const {candidate,input} of prepared) {
     const key = cacheKey(input,model);

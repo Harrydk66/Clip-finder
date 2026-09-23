@@ -33,6 +33,15 @@ Um novo replay V8.3 exige uma nova comparação; a anterior fica em `v9History`
 com diagnósticos e votos, sem duplicar transcrições/cache. A API pública omite
 snapshot, cache e histórico nas consultas de progresso.
 
+Um candidato sem texto sobreposto ao intervalo salvo não interrompe os demais.
+Ele fica em `coverage.unavailable`, com identificação, posição anterior, limites
+e extensão temporal do texto disponível; não recebe nota ou decisão editorial e
+não consome chamada ao judge. O V9 ordena apenas os elegíveis, sem alterar o pool
+original do snapshot nem inventar texto a partir do resumo. A interface explicita
+a cobertura parcial e a lista de trechos não avaliados. Nessa situação, a diferença
+de Acceptance@10 também pode decorrer da falta de dados; não deve ser atribuída
+somente ao judge. Se restarem menos de dez cortes, Acceptance@10 permanece null.
+
 As rotas do worker exigem a autenticação existente; as chaves nunca vão para o
 navegador. O projeto mantém seu modelo atual de acesso às análises por UUID.
 Nenhuma nova chave ou instalação no computador do usuário é necessária.

@@ -51,6 +51,18 @@ test('failed or restarted worker resumes persisted snapshot/cache, not transcrip
   assert.equal(h.state.calls,13);assert.equal(h.state.loads,1);assert.equal(h.state.job.result.v9.status,'completed');
 });
 
+test('web retry from missing-transcript failure uses saved snapshot and exposes partial coverage',async()=>{
+  const h=fixture();h.state.snapshot.chunks.shift();
+  h.state.job.result.v9={status:'failed',error:'Sem transcrição salva para c0',baselineRunId:'v83-fixture',
+    model:'gpt-4o-mini',snapshot:structuredClone(h.state.snapshot),cache:{}};
+  await h.controller.start(id);await h.drain();
+  const state=h.state.job.result.v9;
+  assert.equal(state.status,'completed');assert.equal(state.ranked.length,11);assert.equal(h.state.loads,0);
+  assert.equal(h.state.calls,11);assert.equal(state.coverage.unavailable[0].key,'c0');
+  assert.equal(publicJob(h.state.job).result.v9.coverage.unavailable.length,1);
+  assert.equal(h.state.job.result.candidates.length,10);
+});
+
 test('manual votes persist, reject invalid/stale requests, and calculate acceptance only once fully rated',async()=>{
   const h=fixture();await h.controller.start(id);await h.drain();const v9=h.state.job.result.v9;
   await assert.rejects(h.controller.feedback(id,{key:'c0',label:'bad',snapshotHash:v9.snapshotHash}),/Use Postaria/);

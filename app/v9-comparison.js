@@ -5,7 +5,7 @@ const labels=['Postaria','Talvez','Não postaria'];
 const axes={eventValue:'Valor do acontecimento',standalone:'Compreensão sem contexto',coldHook:'Gancho inicial',
   curiosityGap:'Curiosidade',universality:'Interesse para desconhecidos',completionPayoff:'Conclusão / payoff',contextDependence:'Dependência de contexto'};
 const time=s=>new Date(Math.max(0,Number(s)||0)*1000).toISOString().slice(11,19);
-const metric=m=>m?.acceptanceAt10 == null ? 'Aguardando avaliação completa' : `${Math.round(m.acceptanceAt10*100)}% (${m.counts.Postaria}/10)`;
+const metric=m=>m?.size < 10 ? `Apenas ${m.size} trechos — sem medida Top 10` : m?.acceptanceAt10 == null ? 'Aguardando avaliação completa' : `${Math.round(m.acceptanceAt10*100)}% (${m.counts.Postaria}/10)`;
 
 export default function V9Comparison({job,onRefresh}) {
   const [busy,setBusy]=useState(false),[error,setError]=useState('');
@@ -33,14 +33,21 @@ export default function V9Comparison({job,onRefresh}) {
       <small>Reutiliza a transcrição salva. A primeira execução faz até 60 avaliações de IA; a retomada usa o cache.</small>
     </>}
     {running && <div role="status" aria-live="polite">
-      {v9.total ? `Avaliados ${v9.done} de ${v9.total} trechos.` : 'Preparando os candidatos salvos…'}
+      {v9.total ? `Avaliados ${v9.done} de ${v9.coverage?.eligible ?? v9.total} trechos com texto disponível.` : 'Preparando os candidatos salvos…'}
       <p>Você pode sair da página e voltar depois.</p>
       {!recentlyUpdated && <p>Sem progresso recente. Use “Retomar comparação V9” para continuar com o cache.</p>}
     </div>}
     {v9?.status==='failed' && <p role="alert">A comparação parou: {v9.error} As avaliações já salvas serão reutilizadas.</p>}
     {error && <p role="alert">{error}</p>}
+    {Boolean(v9?.coverage?.unavailable?.length) && <div className="v9-metrics" role="status">
+      <strong>{v9.coverage.unavailable.length} de {v9.coverage.total} trechos sem transcrição no intervalo salvo.</strong>
+      <span>Esses trechos não receberam nota nem entraram na seleção V9. O ranking anterior foi preservado. A comparação tem cobertura parcial; a diferença entre as listas também pode decorrer dessa falta de dados.</span>
+      <details><summary>Ver trechos não avaliados</summary>{v9.coverage.unavailable.map(c=><p key={c.key}>
+        Antes #{c.oldRank} · {time(c.startSeconds)} → {time(c.endSeconds)} · não avaliado por falta de transcrição.
+      </p>)}</details>
+    </div>}
     {v9?.status==='completed' && <>
-      <b>Comparação pronta — avalie os trechos</b>
+      <b>{v9.ranked.length ? 'Comparação pronta — avalie os trechos' : 'Nenhum trecho com transcrição disponível para o V9'}</b>
       <p>Assista somente ao intervalo indicado, pensando em alguém que não conhece a live. Cada escolha é salva automaticamente.</p>
       {v9.vodUrl && <a href={v9.vodUrl} target="_blank" rel="noreferrer">Abrir a live para assistir</a>}
       <div className="v9-metrics" aria-live="polite">
