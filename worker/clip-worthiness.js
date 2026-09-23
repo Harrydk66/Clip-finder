@@ -122,7 +122,14 @@ export function groundJudgment(raw,input) {
   // Never accept a model score supported by a fabricated/missing quote. Unknown
   // features are legitimate outputs; malformed JSON/schema and transport errors are not.
   const value=structuredClone(raw),warnings=[];
-  if (!value || !VERDICTS.includes(value.decision)) throw new Error('Decisão V9 inválida');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Resposta V9 inválida');
+  if (!VERDICTS.includes(value.decision)) {
+    warnings.push({axis:'decision',reason:'invalid_or_missing_decision',rawDecision:value.decision ?? null});
+    value.decision='Talvez';
+    value.publishReason=typeof value.publishReason==='string'&&value.publishReason.trim()?value.publishReason:'Avaliação inconclusiva: o modelo não retornou uma decisão editorial válida.';
+    value.missingContext=typeof value.missingContext==='string'?value.missingContext:'';
+    value.uncertainty='Decisão editorial ausente ou inválida; normalizada para Talvez sem inventar evidência.';
+  }
   for(const axis of ['eventValue',...AXES,'contextDependence']) {
     const a=value[axis];
     if (!a || !(a.score===null || (Number.isInteger(a.score)&&a.score>=0&&a.score<=4)) ||
