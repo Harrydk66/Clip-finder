@@ -9,7 +9,7 @@ process.on("unhandledRejection",err=>console.error("[V7 unhandledRejection]",err
 process.on("uncaughtException",err=>{console.error("[V8 uncaughtException]",err);process.exit(1)});
 function safeEq(a,b){if(!a||!b||a.length!==b.length)return false;return timingSafeEqual(Buffer.from(a),Buffer.from(b))}
 function requireWorkerAuth(req,res,next){if(!WORKER_SECRET)return res.status(503).json({ok:false,error:"WORKER_SECRET não configurado"});const token=String(req.headers.authorization||"").replace(/^Bearer\s+/i,"");if(!safeEq(token,WORKER_SECRET))return res.status(401).json({ok:false,error:"Não autorizado"});next()}
-app.get("/health",(_,res)=>res.json({ok:true,service:"clip-finder-worker",version:"V8.2-evidence-2",commit:process.env.RAILWAY_GIT_COMMIT_SHA||process.env.VERCEL_GIT_COMMIT_SHA||null}));
+app.get("/health",(_,res)=>res.json({ok:true,service:"clip-finder-worker",version:"V8.2-evidence-2",v9Comparison:true,commit:process.env.RAILWAY_GIT_COMMIT_SHA||process.env.VERCEL_GIT_COMMIT_SHA||null}));
 app.use((req,res,next)=>req.path==="/health"?next():requireWorkerAuth(req,res,next));
 app.post("/jobs/recover",async(_,res)=>{try{const jobs=await findStaleJobs();res.json({ok:true,found:jobs.length});setImmediate(()=>recoverStaleJobs().catch(e=>console.error("[V7 recovery]",e)))}catch(e){res.status(500).json({ok:false,error:e.message})}});
 function sb(){return{url:process.env.SUPABASE_URL,key:process.env.SUPABASE_SERVICE_ROLE_KEY}}
@@ -25,6 +25,25 @@ async function claimJob(id){const{url,key}=sb();const now=new Date(),until=new D
 async function heartbeatJob(id){const{url,key}=sb();const now=new Date(),until=new Date(now.getTime()+LEASE_MS);const r=await fetch(url+"/rest/v1/analysis_jobs?id=eq."+encodeURIComponent(id)+"&lease_owner=eq."+encodeURIComponent(WORKER_ID),{method:"PATCH",headers:{apikey:key,Authorization:"Bearer "+key,"Content-Type":"application/json"},body:JSON.stringify({lease_until:until.toISOString(),heartbeat_at:now.toISOString(),updated_at:now.toISOString()}),signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error("Supabase heartbeat: "+await r.text())}
 async function releaseJob(id){const{url,key}=sb();await fetch(url+"/rest/v1/analysis_jobs?id=eq."+encodeURIComponent(id)+"&lease_owner=eq."+encodeURIComponent(WORKER_ID),{method:"PATCH",headers:{apikey:key,Authorization:"Bearer "+key,"Content-Type":"application/json"},body:JSON.stringify({lease_owner:null,lease_until:null,heartbeat_at:new Date().toISOString()}),signal:AbortSignal.timeout(15000)}).catch(()=>{})}
 async function withJobLease(id,fn){if(!await claimJob(id))return false;const timer=setInterval(()=>heartbeatJob(id).catch(e=>console.error("[V8 heartbeat]",e.message)),30000);try{await fn();return true}finally{clearInterval(timer);await releaseJob(id)}}
+async function reserveJob(id){
+  if(ACTIVE_JOBS.has(id))return null;
+  ACTIVE_JOBS.add(id);
+  try{if(!await claimJob(id)){ACTIVE_JOBS.delete(id);return null}}catch(error){ACTIVE_JOBS.delete(id);throw error}
+  let released=false,lost=false;
+  const timer=setInterval(()=>heartbeatJob(id).catch(()=>{lost=true}),30000);
+  return{assertHeld(){if(released||lost)throw new Error("Reserva da análise perdida; retome a comparação.")},
+    async release(){if(released)return;released=true;clearInterval(timer);try{await releaseJob(id)}finally{ACTIVE_JOBS.delete(id)}}};
+}
+async function saveV9Result(id,result){
+  const{url,key}=sb();
+  const r=await fetch(url+"/rest/v1/analysis_jobs?id=eq."+encodeURIComponent(id)+"&lease_owner=eq."+encodeURIComponent(WORKER_ID)+"&lease_until=gt."+encodeURIComponent(new Date().toISOString()),{
+    method:"PATCH",headers:{apikey:key,Authorization:"Bearer "+key,"Content-Type":"application/json",Prefer:"return=representation"},
+    body:JSON.stringify({result,updated_at:new Date().toISOString()}),signal:AbortSignal.timeout(15000)});
+  if(!r.ok||!(await r.json()).length)throw new Error("Não foi possível salvar V9 com a reserva atual; retome a comparação.");
+}
+const v9Controller=createV9Controller({getJob,saveResult:saveV9Result,reserve:reserveJob});
+app.post("/jobs/v9",async(req,res)=>{try{const result=await v9Controller.start(String(req.body?.id||""));res.status(result.cached?200:202).json(result)}catch(error){res.status(error.status||500).json({ok:false,error:error.message})}});
+app.post("/jobs/v9/feedback",async(req,res)=>{try{res.json(await v9Controller.feedback(String(req.body?.id||""),req.body))}catch(error){res.status(error.status||500).json({ok:false,error:error.message})}});
 async function getJob(id){const{url,key}=sb();const r=await fetch(url+"/rest/v1/analysis_jobs?id=eq."+encodeURIComponent(id)+"&select=*",{headers:{apikey:key,Authorization:"Bearer "+key},signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error("Supabase read: "+await r.text());return(await r.json())[0]||null}
 function isReplayJob(job){return job?.result?.replayPending===true||String(job?.stage||"").includes("V8.2")||job?.error==="goldens.map is not a function"}
 async function failJob(id,error){const job=await getJob(id);await patchJob(id,{status:"failed",stage:isReplayJob(job)?"V8.2 • replay falhou":"Retomada falhou",error:error.message})}
@@ -117,9 +136,21 @@ const p=moments[index],progress=46+Math.round(index/moments.length*44);await pat
 try{const candidate=await analyzeCandidate(v,p);out=[...out,candidate]}catch(e){out=[...out,{seconds:p.seconds,score:0,summary:"Falha neste trecho",reason:e.message,text:""}]}
 await patchJob(id,{status:"transcribing",progress:46+Math.round((index+1)/moments.length*44),stage:`Checkpoint ${index+1}/${moments.length} salvo`,result:{title:v.title,durationSeconds:v.duration,queue:moments.map((x,i)=>({...x,index:i,status:i<=index?"done":"queued"})),partialCandidates:out}});
 setTimeout(async()=>{try{const base=`http://127.0.0.1:${process.env.PORT||10000}`;const rr=await fetch(base+"/jobs/step",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+WORKER_SECRET},body:JSON.stringify({id,url,moments,index:index+1,out}),signal:AbortSignal.timeout(5000)});if(!rr.ok)throw new Error("Falha ao iniciar próxima etapa")}catch(e){await patchJob(id,{status:"failed",stage:"Falha ao agendar próxima etapa",error:e.message}).catch(()=>{})}},250)}
-app.post("/jobs/replay-v82",async(req,res)=>{const id=String(req.body?.id||"");if(!/^[0-9a-f-]{36}$/i.test(id))return res.status(400).json({ok:false,error:"Job inválido"});const job=await getJob(id);if(!job)return res.status(404).json({ok:false,error:"Job não encontrado"});const replayRetry=job.status==="failed"&&isReplayJob(job);if(job.status!=="completed"&&!replayRetry)return res.status(409).json({ok:false,error:"Replay exige análise concluída ou replay V8.2 interrompido"});await patchJob(id,{status:"scanning",algo_version:"V8.2",stage:"V8.2 • retomando replay com dados salvos",error:null,result:{...(job.result||{}),replayPending:true}});res.status(202).json({ok:true,id,resumed:replayRetry});setImmediate(()=>runExclusiveJob(id,()=>withJobLease(id,()=>replayV82(id))).catch(async e=>patchJob(id,{status:"failed",stage:"V8.2 • replay falhou",error:e.message}).catch(()=>{})))});
+app.post("/jobs/replay-v82",async(req,res)=>{
+ const id=String(req.body?.id||"");if(!/^[0-9a-f-]{36}$/i.test(id))return res.status(400).json({ok:false,error:"Job inválido"});
+ let lock;try{
+  lock=await reserveJob(id);if(!lock)return res.status(409).json({ok:false,error:"Esta análise já está sendo processada"});
+  const job=await getJob(id);if(!job){await lock.release();return res.status(404).json({ok:false,error:"Job não encontrado"})}
+  const replayRetry=job.status==="failed"&&isReplayJob(job);
+  if(job.status!=="completed"&&!replayRetry){await lock.release();return res.status(409).json({ok:false,error:"Replay exige análise concluída ou replay V8.2 interrompido"})}
+  await patchJob(id,{status:"scanning",algo_version:"V8.2",stage:"V8.2 • retomando replay com dados salvos",error:null,result:{...(job.result||{}),replayPending:true}});
+  res.status(202).json({ok:true,id,resumed:replayRetry});
+  setImmediate(async()=>{try{await replayV82(id)}catch(e){await patchJob(id,{status:"failed",stage:"V8.2 • replay falhou",error:e.message}).catch(()=>{})}finally{await lock.release()}});
+ }catch(error){if(lock)await lock.release();res.status(500).json({ok:false,error:error.message})}
+});
 app.post("/jobs/resume",async(req,res)=>{const id=String(req.body?.id||"");if(!/^[0-9a-f-]{36}$/i.test(id))return res.status(400).json({ok:false,error:"Job inválido"});const job=await getJob(id);if(!job)return res.status(404).json({ok:false,error:"Job não encontrado"});if(job.status!=="failed")return res.status(409).json({ok:false,error:"Apenas jobs com falha podem ser retomados"});await patchJob(id,{status:"queued",stage:isReplayJob(job)?"V8.2 • retomada solicitada":"V8.1 • retomada solicitada",error:null});res.status(202).json({ok:true,id});setImmediate(()=>runExclusiveJob(id,()=>withJobLease(id,()=>resumeJob(id,{allowFailed:true}))).catch(async e=>{return failJob(id,e).catch(()=>{})}))});
 app.post("/jobs/start",async(req,res)=>{const id=String(req.body?.id||"");if(!/^[0-9a-f-]{36}$/i.test(id))return res.status(400).json({ok:false,error:"Job inválido"});res.status(202).json({ok:true,id});setImmediate(()=>runExclusiveJob(id,()=>withJobLease(id,()=>resumeJob(id))).catch(async e=>failJob(id,e).catch(()=>{})))});
 app.post("/jobs/step",async(req,res)=>{const id=String(req.body?.id||""),url=String(req.body?.url||""),moments=Array.isArray(req.body?.moments)?req.body.moments:[],index=Number(req.body?.index||0),out=Array.isArray(req.body?.out)?req.body.out:[];if(!/^[0-9a-f-]{36}$/i.test(id)||!url||!moments.length)return res.status(400).json({ok:false,error:"Etapa inválida"});res.status(202).json({ok:true,id,index});setImmediate(async()=>{try{const v=await resolveVod(url);v.url=url;await processCandidateQueue(id,url,v,moments,index,out)}catch(e){await patchJob(id,{status:"failed",stage:"Etapa independente falhou",error:e.message}).catch(()=>{})}})});
 
 app.listen(process.env.PORT||10000,"0.0.0.0",()=>{setTimeout(()=>recoverStaleJobs().catch(e=>console.error("[V7 recovery]",e)),5000);setInterval(()=>recoverStaleJobs().catch(e=>console.error("[V7 recovery]",e)),120000)});
+import {createV9Controller} from './v9-web.js';
