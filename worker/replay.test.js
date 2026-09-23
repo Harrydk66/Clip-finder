@@ -57,9 +57,10 @@ test('failed replay runs to 100% through worker endpoint without transcription o
   assert.equal(h.job.result.goldenFunnel.goldens[0].stages.top10.hit,true);
   assert.equal(h.job.result.checkpoint.preserve,true);assert.equal(h.job.result.replayPending,false);
   assert.equal(JSON.stringify(h.chunks),before);
-  assert.equal(new Set(h.trace.map(t=>t.stage)).size,6);
-  assert.ok(h.patches.filter(p=>p.stage).every(p=>p.stage.startsWith('V8.2')));
-  assert.ok(h.patches.filter(p=>p.algo_version).every(p=>p.algo_version==='V8.2'));
+  assert.deepEqual([...new Set(h.trace.map(t=>t.stage))],['persisted_v81_input','v82_renormalized','understood','pre_ranked','vision','global_ranked','pairwise_final']);
+  assert.ok(h.patches.filter(p=>p.stage).every(p=>/^V8\.[23]/.test(p.stage)));
+  assert.ok(h.patches.filter(p=>p.algo_version).every(p=>['V8.2','V8.3'].includes(p.algo_version)));
+  assert.equal(h.job.algo_version,'V8.3');
   assert.ok(!h.requests.some(r=>/transcriptions/.test(r.url)));
 });
 
