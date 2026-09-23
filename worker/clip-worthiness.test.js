@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {AXES,RUBRIC,judgeInput,validateJudgment,rerank,acceptance,callJudge} from './clip-worthiness.js';
+import {AXES,RUBRIC,judgeInput,validateJudgment,groundJudgment,rerank,acceptance,callJudge} from './clip-worthiness.js';
 import {loadSnapshot,runExperiment,main} from './replay-v9.js';
 
 const id = '11111111-1111-1111-1111-111111111111';
@@ -67,6 +67,45 @@ test('judge input excludes old rankings, scores, participant lists and ranking r
   }});
   assert.equal(request.messages[0].role,'system');assert.equal(request.messages[0].content,RUBRIC);
   assert.equal(request.messages[1].content,'DADOS: '+JSON.stringify(input));
+});
+
+test('unsupported features become unknown, never fabricated quotes or negative editorial judgments',()=>{
+  const snapshot=fixture(1),input=judgeInput(snapshot.candidates[0],snapshot.chunks);
+  for(const decision of ['Postaria','Não postaria','Talvez']) {
+    const raw=verdict(input,{decision});raw.contextDependence.evidence=[];
+    raw.standalone.evidence[0].quote='Texto que nunca foi dito';
+    const before=JSON.stringify(raw),result=groundJudgment(raw,input);
+    assert.equal(result.judgment.contextDependence.score,null);assert.equal(result.judgment.standalone.score,null);
+    assert.deepEqual(result.judgment.standalone.evidence,[]);assert.equal(result.judgment.decision,'Talvez');
+    assert.equal(result.judgment.curiosityGap.score,3);assert.equal(JSON.stringify(raw),before);
+    assert.ok(result.warnings.some(w=>w.axis==='contextDependence'&&w.reason==='score_without_evidence'));
+    assert.doesNotThrow(()=>validateJudgment(result.judgment,input));
+  }
+});
+
+test('coarse hook timing and unsupported publish decision are conservative; valid response stays identical',()=>{
+  const snapshot=fixture(1),input=judgeInput(snapshot.candidates[0],snapshot.chunks);
+  const raw=verdict(input);
+  assert.deepEqual(groundJudgment(raw,input),{judgment:validateJudgment(raw,input),warnings:[]});
+  input.segments[0].openingVerified=false;
+  const result=groundJudgment(raw,input);
+  assert.equal(result.judgment.coldHook.score,null);assert.equal(result.judgment.decision,'Talvez');
+  assert.ok(result.warnings.some(w=>w.reason==='opening_timing_unknown'));
+  assert.throws(()=>groundJudgment({},input),/inválida/);
+  raw.standalone.score=7;assert.throws(()=>groundJudgment(raw,input),/Eixo V9 inválido/);
+});
+
+test('actual model adapter preserves raw unsupported response and cache replay costs zero',async()=>{
+  const snapshot=fixture(1),cache={};let calls=0;
+  const judge=async input=>callJudge(input,{model:'fixture',apiKey:'fixture',fetchImpl:async()=>{
+    calls++;const raw=verdict(input);raw.standalone.evidence[0].quote='Não está na transcrição';
+    return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify(raw)}}],usage:{total_tokens:10}})};
+  }});
+  const result=await rerank(snapshot,{cache,judge});
+  assert.equal(result.length,1);assert.equal(result[0].diagnostics.standalone.score,null);
+  assert.ok(result[0].diagnostics.validationWarnings.length);
+  assert.equal(Object.values(cache)[0].rawJudgment.standalone.evidence[0].quote,'Não está na transcrição');
+  assert.deepEqual(await rerank(snapshot,{cache,judge}),result);assert.equal(calls,1);
 });
 
 test('failure preserves successful cache, resume spends only remaining calls, model/input changes invalidate cache',async()=>{

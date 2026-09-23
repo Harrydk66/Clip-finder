@@ -63,7 +63,7 @@ export async function loadSnapshot(id,{url,key,fetchImpl=fetch}) {
 
 export async function runExperiment(snapshot,{model='gpt-4o-mini',cache={},save=async()=>{},judge,apiKey}={}) {
   const result = {version:VERSION,model,rubricHash:digest(RUBRIC),snapshotHash:digest(snapshot),snapshot,cache,
-    status:'running',createdAt:new Date().toISOString(),rankingPolicy:'decision, mean of known cold axes, old rank; eventValue excluded',
+    status:'running',createdAt:new Date().toISOString(),evidencePolicy:'unsupported-axes-null-v1',rankingPolicy:'decision, mean of known cold axes, old rank; eventValue excluded',
     limitations:['Saved transcript and saved visual descriptions only; no new vision/audio.', 'Segment timestamps do not prove word-level hook timing.',
       'Unknown axes remain null; clipWorthiness is a partial-evidence score, not a probability.']};
   await save(result);

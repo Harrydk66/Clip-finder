@@ -84,6 +84,12 @@ export function judgeInput(candidate, chunks) {
 
 export function cacheKey(input, model) { return hash({version:VERSION,rubric:RUBRIC,model,input}); }
 
+function publicationSupported(value,input) {
+  return AXES.every(k=>value[k].score !== null && value[k].score >= 3 &&
+    value[k].evidence.every(e=>!input.segments.find(s=>s.sourceId === e.sourceId)?.overlapOnly)) &&
+    value.contextDependence.score !== null && value.contextDependence.score <= 1;
+}
+
 export function validateJudgment(value, input) {
   if (!value || !VERDICTS.includes(value.decision)) throw new Error('Decisão V9 inválida');
   for (const field of ['publishReason','missingContext','uncertainty']) {
@@ -107,11 +113,39 @@ export function validateJudgment(value, input) {
     });
     result[axis] = {score:a.score,reason:a.reason,evidence};
   }
-  if (result.decision === 'Postaria' && (AXES.some(k=>result[k].score === null || result[k].score < 3) ||
-      result.contextDependence.score === null || result.contextDependence.score > 1 ||
-      AXES.some(k=>result[k].evidence.some(e=>input.segments.find(s=>s.sourceId === e.sourceId).overlapOnly))))
+  if (result.decision === 'Postaria' && !publicationSupported(result,input))
     throw new Error('Postaria sem evidência suficiente para público frio');
   return result;
+}
+
+export function groundJudgment(raw,input) {
+  // Never accept a model score supported by a fabricated/missing quote. Unknown
+  // features are legitimate outputs; malformed JSON/schema and transport errors are not.
+  const value=structuredClone(raw),warnings=[];
+  if (!value || !VERDICTS.includes(value.decision)) throw new Error('Decisão V9 inválida');
+  for(const axis of ['eventValue',...AXES,'contextDependence']) {
+    const a=value[axis];
+    if (!a || !(a.score===null || (Number.isInteger(a.score)&&a.score>=0&&a.score<=4)) ||
+      typeof a.reason!=='string' || !a.reason.trim() || !Array.isArray(a.evidence))
+      throw new Error('Eixo V9 inválido: '+axis);
+    const quotesValid=a.evidence.every(e=>{
+      const segment=input.segments.find(s=>s.sourceId===e?.sourceId);
+      return segment && typeof e.quote==='string' && e.quote.trim() && segment.text.includes(e.quote);
+    });
+    const reason=!quotesValid?'quote_not_grounded':a.score!==null&&!a.evidence.length?'score_without_evidence':
+      axis==='coldHook'&&a.score!==null&&a.evidence.some(e=>!input.segments.find(s=>s.sourceId===e.sourceId).openingVerified)?'opening_timing_unknown':null;
+    if(reason) {
+      warnings.push({axis,reason});
+      value[axis]={score:null,evidence:[],reason:'Não verificável: a evidência fornecida não sustenta esta nota no trecho salvo.'};
+    }
+  }
+  if(value.decision==='Postaria'&&!publicationSupported(value,input)) warnings.push({axis:'decision',reason:'publication_not_supported'});
+  if(warnings.length) {
+    value.decision='Talvez';
+    value.publishReason='Avaliação inconclusiva: parte das notas não tem evidência verificável. Revise o trecho manualmente.';
+    value.uncertainty='Notas sem suporte foram marcadas como não verificáveis; a resposta original foi preservada para auditoria.';
+  }
+  return {judgment:validateJudgment(value,input),warnings};
 }
 
 export async function callJudge(input, {model, apiKey, fetchImpl=fetch}) {
@@ -124,8 +158,10 @@ export async function callJudge(input, {model, apiKey, fetchImpl=fetch}) {
   });
   if (!response.ok) throw new Error('Judge V9 HTTP ' + response.status);
   const body = await response.json();
-  const judgment = validateJudgment(JSON.parse(body.choices?.[0]?.message?.content || '{}'),input);
-  return {judgment,usage:body.usage || null,responseModel:body.model || model};
+  const raw=JSON.parse(body.choices?.[0]?.message?.content || '{}');
+  const {judgment,warnings}=groundJudgment(raw,input);
+  return {judgment,usage:body.usage || null,responseModel:body.model || model,
+    validationWarnings:warnings,...(warnings.length ? {rawJudgment:raw} : {})};
 }
 
 export async function rerank(snapshot, {model='gpt-4o-mini',cache={},judge=callJudge,onCheckpoint=async()=>{},onCoverage=async()=>{},apiKey}={}) {
@@ -152,6 +188,7 @@ export async function rerank(snapshot, {model='gpt-4o-mini',cache={},judge=callJ
       await onCheckpoint(cache);
     }
     const diagnostics = validateJudgment(cache[key].judgment,input);
+    if(cache[key].validationWarnings?.length) diagnostics.validationWarnings=cache[key].validationWarnings;
     const known = AXES.filter(k=>diagnostics[k].score !== null);
     const score = known.length ? Math.round(100*known.reduce((sum,k)=>sum+diagnostics[k].score,0)/(4*known.length)) : null;
     evaluated.push({...candidate,diagnostics,clipWorthiness:score,evaluatedAxes:known.length,cacheKey:key});
