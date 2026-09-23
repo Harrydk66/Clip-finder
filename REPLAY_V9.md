@@ -42,6 +42,16 @@ a cobertura parcial e a lista de trechos não avaliados. Nessa situação, a dif
 de Acceptance@10 também pode decorrer da falta de dados; não deve ser atribuída
 somente ao judge. Se restarem menos de dez cortes, Acceptance@10 permanece null.
 
+Quando o modelo dá nota sem citação, cita texto que não está no segmento indicado
+ou afirma um hook sem evidência temporal, o eixo afetado fica `null` e sua citação
+é removida. A decisão passa a `Talvez`, com aviso de avaliação inconclusiva. A resposta
+original fica no cache privado (`rawJudgment`); `validationWarnings` registra os
+eixos afetados nos diagnósticos. O resultado registra a política
+`unsupported-axes-null-v1`. Notas válidas e cache anterior são preservados, sem
+chamadas extras de reparo. Isso não aceita citações inventadas: a resposta corrigida
+passa novamente pelo validador estrito. JSON/esquema inválido e falhas HTTP ainda
+interrompem a execução, mantendo o cache válido para retomada.
+
 As rotas do worker exigem a autenticação existente; as chaves nunca vão para o
 navegador. O projeto mantém seu modelo atual de acesso às análises por UUID.
 Nenhuma nova chave ou instalação no computador do usuário é necessária.
