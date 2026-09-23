@@ -40,14 +40,14 @@ export default function V9Comparison({job,onRefresh}) {
     {v9?.status==='failed' && <p role="alert">A comparação parou: {v9.error} As avaliações já salvas serão reutilizadas.</p>}
     {error && <p role="alert">{error}</p>}
     {Boolean(v9?.coverage?.unavailable?.length) && <div className="v9-metrics" role="status">
-      <strong>{v9.coverage.unavailable.length} de {v9.coverage.total} trechos sem transcrição no intervalo salvo.</strong>
-      <span>Esses trechos não receberam nota nem entraram na seleção V9. O ranking anterior foi preservado. A comparação tem cobertura parcial; a diferença entre as listas também pode decorrer dessa falta de dados.</span>
+      <strong>{v9.coverage.unavailable.length} de {v9.coverage.total} trechos sem avaliação verificável.</strong>
+      <span>Esses trechos não receberam nota nem entraram na seleção V9. O ranking anterior foi preservado. A comparação tem cobertura parcial; a diferença entre as listas também pode decorrer de texto ausente ou de respostas inválidas da IA.</span>
       <details><summary>Ver trechos não avaliados</summary>{v9.coverage.unavailable.map(c=><p key={c.key}>
-        Antes #{c.oldRank} · {time(c.startSeconds)} → {time(c.endSeconds)} · não avaliado por falta de transcrição.
+        Antes #{c.oldRank} · {time(c.startSeconds)} → {time(c.endSeconds)} · {c.reason==='INVALID_JUDGE_RESPONSE'?'resposta de avaliação inválida':'sem transcrição no intervalo salvo'}.
       </p>)}</details>
     </div>}
     {v9?.status==='completed' && <>
-      <b>{v9.ranked.length ? 'Comparação pronta — avalie os trechos' : 'Nenhum trecho com transcrição disponível para o V9'}</b>
+      <b>{v9.ranked.length ? 'Comparação pronta — avalie os trechos' : 'Nenhuma avaliação V9 verificável disponível'}</b>
       <p>Assista somente ao intervalo indicado, pensando em alguém que não conhece a live. Cada escolha é salva automaticamente.</p>
       {v9.vodUrl && <a href={v9.vodUrl} target="_blank" rel="noreferrer">Abrir a live para assistir</a>}
       <div className="v9-metrics" aria-live="polite">

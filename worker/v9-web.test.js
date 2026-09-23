@@ -97,6 +97,8 @@ test('polling returns useful progress/diagnostics, never the transcript snapshot
   assert.equal(v9.done,12);assert.equal(v9.total,12);assert.equal(v9.baselineTop10.length,10);
   assert.equal(v9.snapshot,undefined);assert.equal(v9.cache,undefined);assert.equal(out.result.v9History,undefined);
   assert.equal(v9.ranked[0].diagnostics.decision,'Postaria');assert.ok(h.state.job.result.v9.snapshot);
+  h.state.job.result.v9.cache.invalid={unavailable:{reason:'INVALID_JUDGE_RESPONSE'},rawResponse:'private'};
+  assert.equal(publicJob(h.state.job).result.v9.done,12,'invalid response is not counted as evaluated');
 });
 
 test('Next V9 proxy uses server secret, forwards only expected fields and surfaces worker errors',async()=>{

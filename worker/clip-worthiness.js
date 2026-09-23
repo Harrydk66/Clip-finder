@@ -158,10 +158,17 @@ export async function callJudge(input, {model, apiKey, fetchImpl=fetch}) {
   });
   if (!response.ok) throw new Error('Judge V9 HTTP ' + response.status);
   const body = await response.json();
-  const raw=JSON.parse(body.choices?.[0]?.message?.content || '{}');
-  const {judgment,warnings}=groundJudgment(raw,input);
-  return {judgment,usage:body.usage || null,responseModel:body.model || model,
-    validationWarnings:warnings,...(warnings.length ? {rawJudgment:raw} : {})};
+  const rawResponse=body.choices?.[0]?.message?.content || '';
+  const metadata={usage:body.usage || null,responseModel:body.model || model};
+  try {
+    const raw=JSON.parse(rawResponse);
+    const {judgment,warnings}=groundJudgment(raw,input);
+    return {judgment,...metadata,validationWarnings:warnings,...(warnings.length ? {rawJudgment:raw} : {})};
+  } catch(error) {
+    // A malformed model answer is not a judgment. Preserve it for audit and do
+    // not retry it endlessly, score it, or abort unrelated candidates.
+    return {...metadata,unavailable:{reason:'INVALID_JUDGE_RESPONSE',error:error.message},rawResponse};
+  }
 }
 
 export async function rerank(snapshot, {model='gpt-4o-mini',cache={},judge=callJudge,onCheckpoint=async()=>{},onCoverage=async()=>{},apiKey}={}) {
@@ -184,8 +191,15 @@ export async function rerank(snapshot, {model='gpt-4o-mini',cache={},judge=callJ
     if (!cache[key]) {
       cache[key] = await judge(input,{model,apiKey});
       // Validate injected providers too; a failed candidate never produces a partial ranking.
-      try { validateJudgment(cache[key].judgment,input); } catch (error) { delete cache[key]; throw error; }
+      try { if(cache[key].unavailable?.reason!=='INVALID_JUDGE_RESPONSE')validateJudgment(cache[key].judgment,input); }
+      catch (error) { delete cache[key]; throw error; }
       await onCheckpoint(cache);
+    }
+    if(cache[key].unavailable?.reason==='INVALID_JUDGE_RESPONSE') {
+      unavailable.push({key:candidate.key,oldRank:candidate.oldRank,startSeconds:candidate.start_seconds,endSeconds:candidate.end_seconds,
+        reason:'INVALID_JUDGE_RESPONSE',details:{error:cache[key].unavailable.error},decision:null,clipWorthiness:null});
+      await onCoverage({total:snapshot.candidates.length,eligible:snapshot.candidates.length-unavailable.length,unavailable});
+      continue;
     }
     const diagnostics = validateJudgment(cache[key].judgment,input);
     if(cache[key].validationWarnings?.length) diagnostics.validationWarnings=cache[key].validationWarnings;
