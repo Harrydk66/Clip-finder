@@ -132,9 +132,17 @@ export function groundJudgment(raw,input) {
   }
   for(const axis of ['eventValue',...AXES,'contextDependence']) {
     const a=value[axis];
-    if (!a || !(a.score===null || (Number.isInteger(a.score)&&a.score>=0&&a.score<=4)) ||
-      typeof a.reason!=='string' || !a.reason.trim() || !Array.isArray(a.evidence))
-      throw new Error('Eixo V9 inválido: '+axis);
+    if (!a || typeof a !== 'object' || Array.isArray(a)) {
+      warnings.push({axis,reason:'missing_or_invalid_axis'});
+      value[axis]={score:null,evidence:[],reason:'Não verificável: o modelo não retornou este eixo em formato válido.'};
+      continue;
+    }
+    if (!(a.score===null || (Number.isInteger(a.score)&&a.score>=0&&a.score<=4)) ||
+      typeof a.reason!=='string' || !a.reason.trim() || !Array.isArray(a.evidence)) {
+      warnings.push({axis,reason:'invalid_axis_schema'});
+      value[axis]={score:null,evidence:[],reason:'Não verificável: o modelo retornou este eixo em formato inválido.'};
+      continue;
+    }
     const quotesValid=a.evidence.every(e=>{
       const segment=input.segments.find(s=>s.sourceId===e?.sourceId);
       return segment && typeof e.quote==='string' && e.quote.trim() && segment.text.includes(e.quote);
