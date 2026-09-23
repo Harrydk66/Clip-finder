@@ -54,7 +54,8 @@ export async function loadSnapshot(id,{url,key,fetchImpl=fetch}) {
       (c.arc_id || null) === (oldTop[i].arcId || null)))
     throw new Error('Trace não corresponde ao Top 10 salvo; comparação cancelada');
   const fresh = (await read('analysis_jobs',jobQuery))[0];
-  if (!fresh || fresh.updated_at !== job.updated_at || fresh.status !== 'completed' || digest(fresh.result) !== digest(job.result))
+  // Lease heartbeats update updated_at without changing any replay input.
+  if (!fresh || fresh.status !== 'completed' || fresh.algo_version !== job.algo_version || digest(fresh.result) !== digest(job.result))
     throw new Error('Job mudou durante a leitura; tente novamente após concluir');
   return {jobId:id,vodUrl:job.vod_url,title:job.result.title,source,baselineVersion:job.algo_version,
     baselineUpdatedAt:job.updated_at,baselineSavedTop10:oldTop,baselineTop10,candidates,chunks};

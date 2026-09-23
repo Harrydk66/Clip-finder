@@ -2,9 +2,45 @@
 
 O V8.3 encontra acontecimentos reais; a hipótese V9 é que um judge com a decisão
 editorial de publicar para desconhecidos melhora Acceptance@10. Este experimento
-muda apenas a avaliação final do pool salvo. `worker/server.js`, V8/V8.3, o replay
-HTTP existente, discovery, cortes, participantes e transcrições permanecem iguais.
-Não há migração, deploy obrigatório, nova transcrição, áudio ou extração de frames.
+muda apenas a avaliação final do pool salvo. Discovery, cortes, participantes,
+transcrições e os algoritmos V8/V8.3 permanecem iguais. A integração web acrescenta
+rotas e uma reserva compartilhada entre os replays para impedir execuções concorrentes.
+Não há migração, nova transcrição, áudio ou extração de frames.
+
+## Usar pelo site — recomendado
+
+Após publicar esta branch no Vercel e no worker Railway:
+
+1. Abra a análise concluída. Também é possível usar `/?analysis=UUID_DA_ANALISE`
+   para abrir o resultado em outro navegador ou dispositivo.
+2. Clique em **Comparar com V9**. O botão requer o replay V8.3 concluído, porque
+   a comparação de seleção precisa do pool persistido, além do Top10.
+3. A página mostra o progresso; pode fechar e voltar depois. O worker usa as
+   mesmas variáveis `OPENAI_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+   e `WORKER_SECRET` já configuradas. Vercel usa `WORKER_URL` e `WORKER_SECRET`.
+4. Quando terminar, assista aos intervalos e escolha **Postaria / Talvez /
+   Não postaria**. Cada escolha é salva no banco e vale nas duas listas.
+   A tela calcula Acceptance@10 após completar as avaliações de cada Top10.
+5. Se houver falha ou reinício do worker, clique em **Retomar comparação V9**.
+   Após dois minutos sem atualizações o botão de retomada aparece; a reserva
+   no banco impede uma segunda execução enquanto a primeira estiver ativa.
+
+A comparação é persistida em `analysis_jobs.result.v9`, incluindo snapshot,
+cache, diagnósticos e avaliações humanas. `result.candidates`, `algo_version`,
+status e os demais campos da análise V8.3 são preservados. Repetir a solicitação
+de uma comparação concluída da mesma versão devolve o resultado salvo sem custo.
+Um novo replay V8.3 exige uma nova comparação; a anterior fica em `v9History`
+com diagnósticos e votos, sem duplicar transcrições/cache. A API pública omite
+snapshot, cache e histórico nas consultas de progresso.
+
+As rotas do worker exigem a autenticação existente; as chaves nunca vão para o
+navegador. O projeto mantém seu modelo atual de acesso às análises por UUID.
+Nenhuma nova chave ou instalação no computador do usuário é necessária.
+
+O site e o worker precisam da mesma atualização. Antes de testar, confira
+`v9Comparison: true` no `/health` do worker e a presença do botão no site.
+Esta atualização inclui Next.js 15.5.26, um patch de manutenção da série usada
+pelo projeto, após o instalador alertar sobre vulnerabilidade em 15.5.7.
 
 ## Rodar o replay
 
@@ -39,10 +75,9 @@ Use `--model NOME` para fixar o modelo. Sem isso: `V9_JUDGE_MODEL`, depois
 `RANKING_MODEL`, depois `gpt-4o-mini`. Para isolar o prompt, use o mesmo modelo do
 ranking antigo quando souber qual foi; o trace legado não registra esse modelo.
 
-**Este comando é o replay V9. O botão de replay da interface continua sendo V8.3.**
-V9 grava um resultado local, não substitui `analysis_jobs.result` ou o Top10 do site.
-Para usar em produção depois de validar a hipótese, seria necessária uma etapa
-separada de integração. O arquivo de resultado contém transcrições: guarde-o como
+**Este comando é a alternativa local ao botão Comparar com V9.** O outro botão,
+**Reprocessar com V8.3**, continua executando o replay antigo. A execução por CLI
+grava um resultado local, não atualiza o resultado V9 no site. O arquivo contém transcrições: guarde-o como
 dado privado e não o adicione ao repositório.
 
 ## Custo, falhas e repetição
@@ -136,7 +171,7 @@ verificam implementação, preservação e custo de replay, não qualidade edito
 ## Verificações
 
 ```sh
-node --test worker/replay.test.js worker/clip-worthiness.test.js
+node --test worker/replay.test.js worker/clip-worthiness.test.js worker/v9-web.test.js
 ```
 
 Se criação de subprocessos estiver restrita, adicione `--test-isolation=none`.

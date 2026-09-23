@@ -101,7 +101,7 @@ function database({legacy=false,mismatch=false,changed=false}={}) {
     assert.equal(options.method,'GET','database must be read-only');
     const url = new URL(raw);requests.push(url);
     let rows;
-    if (url.pathname.endsWith('/analysis_jobs')) {jobReads++;rows=[{...job,updated_at:changed&&jobReads>1?'new':job.updated_at}];}
+    if (url.pathname.endsWith('/analysis_jobs')) {jobReads++;rows=[{...job,result:changed&&jobReads>1?{...job.result,replayRunId:'changed'}:job.result}];}
     else if (url.pathname.endsWith('/vod_chunks')) rows=snapshot.chunks;
     else if (url.pathname.endsWith('/candidate_trace')) {
       assert.equal(url.searchParams.get('stage'),'eq.pairwise_final');assert.equal(url.searchParams.get('run_id'),'eq.v83-fixture');

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {randomUUID} from 'node:crypto';
+import {publicJob} from '../lib/v9-public.js';
 
 const source=readFileSync(new URL('./server.js',import.meta.url),'utf8');
 const vod='https://kick.com/example/videos/01a0b1e7-9b88-7754-b1e2-b2c97c9500b1';
@@ -29,10 +30,10 @@ function harness(overrides={}){
   };
   const app={use(){},get(path,fn){routes.set(path,fn)},post(path,fn){routes.set(path,fn)},listen(){}};
   const express=Object.assign(()=>app,{json:()=>()=>{}});
-  const context=vm.createContext({express,fetch,process:{env:{SUPABASE_URL:'https://db.invalid',SUPABASE_SERVICE_ROLE_KEY:'fixture',RAILWAY_GIT_COMMIT_SHA:'test-sha'},on(){}},console,crypto:{randomUUID},promisify:()=>async()=>{throw new Error('Unexpected audio extraction')},execFile(){},Buffer,AbortSignal,setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},setImmediate:fn=>pending.push(fn)});
+  const context=vm.createContext({createV9Controller:()=>({}),express,fetch,process:{env:{SUPABASE_URL:'https://db.invalid',SUPABASE_SERVICE_ROLE_KEY:'fixture',RAILWAY_GIT_COMMIT_SHA:'test-sha'},on(){}},console,crypto:{randomUUID},promisify:()=>async()=>{throw new Error('Unexpected audio extraction')},execFile(){},Buffer,AbortSignal,setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},setImmediate:fn=>pending.push(fn)});
   // Run the real worker orchestration; only imports, server startup, external APIs
   // and image extraction are replaced. No production data or credentials are used.
-  vm.runInContext(source.replace(/import(?:\{[^}]+\}| express )from"[^"]+";/g,''),context);
+  vm.runInContext(source.replace(/import \{createV9Controller\} from '[^']+';/,'').replace(/import(?:\{[^}]+\}| express )from"[^"]+";/g,''),context);
   vm.runInContext('extractFrame=async()=>Buffer.from("fixture-image")',context);
   return {context,job,chunks,requests,patches,trace,routes,fetch,pending,async drain(){while(pending.length)await pending.shift()()}};
 }
@@ -85,8 +86,8 @@ test('recovery failure preserves progress and replay identity',async()=>{
 test('Next PUT accepts failed replay, rejects unrelated failure, and reaches worker',async()=>{
   for(const replay of [true,false]){
     const h=harness(replay?{}:{stage:'V8.1 • falha',error:'unrelated'});
-    const next=vm.createContext({Response,AbortSignal,process:{env:{}},getJob:async()=>h.job,fetch:async(url,options)=>{assert.ok(url.endsWith('/jobs/replay-v82'));const res=response();await h.routes.get('/jobs/replay-v82')({body:JSON.parse(options.body)},res);return {ok:res.code<400,status:res.code,json:async()=>res.body}}});
-    vm.runInContext(readFileSync(new URL('../app/api/jobs/[id]/route.js',import.meta.url),'utf8').replace(/^import[^;]+;/,'').replaceAll('export async function','async function'),next);
+    const next=vm.createContext({publicJob,Response,AbortSignal,process:{env:{}},getJob:async()=>h.job,fetch:async(url,options)=>{assert.ok(url.endsWith('/jobs/replay-v82'));const res=response();await h.routes.get('/jobs/replay-v82')({body:JSON.parse(options.body)},res);return {ok:res.code<400,status:res.code,json:async()=>res.body}}});
+    vm.runInContext(readFileSync(new URL('../app/api/jobs/[id]/route.js',import.meta.url),'utf8').replace(/^import[^;]+;/gm,'').replaceAll('export async function','async function'),next);
     const res=await next.PUT(null,{params:Promise.resolve({id})});
     assert.equal(res.status,replay?200:409);
     await h.drain();if(replay)assert.equal(h.job.status,'completed');
@@ -96,6 +97,14 @@ test('Next PUT accepts failed replay, rejects unrelated failure, and reaches wor
 test('health identifies deployed fix and commit',()=>{
   const h=harness(),res=response();h.routes.get('/health')(null,res);
   assert.equal(res.body.version,'V8.2-evidence-2');assert.equal(res.body.commit,'test-sha');
+});
+
+test('legacy replay cannot overwrite a result while V9 holds the shared reservation',async()=>{
+  const h=harness({status:'completed',error:null}),before=JSON.stringify(h.job.result),res=response();
+  const lock=await h.context.reserveJob(id);
+  await h.routes.get('/jobs/replay-v82')({body:{id}},res);
+  assert.equal(res.code,409);assert.equal(JSON.stringify(h.job.result),before);
+  await lock.release();
 });
 
 
