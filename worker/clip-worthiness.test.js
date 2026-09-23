@@ -85,11 +85,39 @@ test('failure preserves successful cache, resume spends only remaining calls, mo
   await rerank(snapshot,{cache:result.cache,judge:async input=>{calls++;return provider(input)}});assert.equal(calls,1);
 });
 
-test('missing transcript and duplicate IDs fail before any model spend',async()=>{
+test('missing transcript is explicit; duplicate IDs and invalid bounds still fail before model spend',async()=>{
   const missing = fixture(2);missing.chunks=[];
-  await assert.rejects(rerank(missing,{judge:async()=>{assert.fail('no calls')}}),/Sem transcrição/);
+  let coverage;
+  assert.deepEqual(await rerank(missing,{judge:async()=>{assert.fail('no calls')},onCoverage:async value=>{coverage=value}}),[]);
+  assert.equal(coverage.unavailable.length,2);assert.equal(coverage.eligible,0);
+  const invalid=fixture(2);invalid.candidates[1].end_seconds=-1;
+  await assert.rejects(rerank(invalid,{judge:async()=>{assert.fail('no calls')}}),/Limites/);
   const duplicate = fixture(2);duplicate.candidates[1].key='c0';
   await assert.rejects(rerank(duplicate,{judge:async()=>{assert.fail('no calls')}}),/duplicados/);
+});
+
+test('missing interval in Top60 no longer aborts replay, has no score and preserves old Top10/cache',async()=>{
+  const snapshot=fixture(60);
+  Object.assign(snapshot.candidates[0],{key:'14400|arc-116|frustração exagerada',start_seconds:14400,end_seconds:14460,peak_seconds:14400});
+  const before=JSON.stringify(snapshot);let calls=0;
+  const result=await runExperiment(snapshot,{judge:async input=>{calls++;return provider(input)}});
+  assert.equal(result.status,'completed');assert.equal(calls,59);assert.equal(result.ranked.length,59);
+  assert.equal(result.coverage.total,60);assert.equal(result.coverage.eligible,59);
+  assert.equal(result.coverage.unavailable[0].key,snapshot.candidates[0].key);
+  assert.equal(result.coverage.unavailable[0].decision,null);assert.equal(result.coverage.unavailable[0].clipWorthiness,null);
+  assert.equal(result.coverage.unavailable[0].details.savedTextEnd,5960);
+  assert.ok(result.review.some(r=>r.key===snapshot.candidates[0].key),'old Top10 still manually reviewable');
+  assert.equal(JSON.stringify(snapshot),before);
+  const repeated=await runExperiment(snapshot,{cache:result.cache,judge:async()=>{assert.fail('must use cache')}});
+  assert.deepEqual(repeated.ranked,result.ranked);assert.deepEqual(repeated.coverage,result.coverage);
+});
+
+test('all missing text completes with explicit zero coverage and no fabricated V9 Top10',async()=>{
+  const snapshot=fixture(10);snapshot.chunks=[];
+  const result=await runExperiment(snapshot,{judge:async()=>{assert.fail('no model spend')}});
+  assert.equal(result.status,'completed');assert.equal(result.ranked.length,0);assert.equal(result.coverage.unavailable.length,10);
+  assert.equal(result.metrics.v9.size,0);assert.equal(result.metrics.v9.acceptanceAt10,null);
+  assert.equal(result.review.length,10);assert.equal(Object.keys(result.cache).length,0);
 });
 
 function database({legacy=false,mismatch=false,changed=false}={}) {
