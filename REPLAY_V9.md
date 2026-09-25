@@ -49,8 +49,17 @@ original fica no cache privado (`rawJudgment`); `validationWarnings` registra os
 eixos afetados nos diagnósticos. O resultado registra a política
 `unsupported-axes-null-v1`. Notas válidas e cache anterior são preservados, sem
 chamadas extras de reparo. Isso não aceita citações inventadas: a resposta corrigida
-passa novamente pelo validador estrito. JSON/esquema inválido e falhas HTTP ainda
-interrompem a execução, mantendo o cache válido para retomada.
+passa novamente pelo validador estrito.
+
+JSON/esquema inválido, decisão desconhecida ou resposta vazia do modelo não vira
+julgamento: o candidato fica em `coverage.unavailable` com motivo
+`INVALID_JUDGE_RESPONSE`, sem nota e fora do ranking V9. A resposta bruta, motivo
+e uso retornado pela API ficam no cache privado. Essa indisponibilidade também é
+cacheada, evitando pagar repetidamente pela mesma resposta em uma retomada. Os
+demais candidatos continuam. O resultado registra a política
+`unavailable-cached-v1`; o progresso conta apenas julgamentos válidos. A interface
+distingue falta de transcrição de avaliação inválida e mantém o aviso de cobertura
+parcial. Falhas de rede/HTTP ainda interrompem a execução, com cache preservado.
 
 As rotas do worker exigem a autenticação existente; as chaves nunca vão para o
 navegador. O projeto mantém seu modelo atual de acesso às análises por UUID.

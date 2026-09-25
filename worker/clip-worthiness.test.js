@@ -51,7 +51,8 @@ test('rejects hallucinations, bad scores, missing reasons, unsupported publish d
     v=>v.coldHook.score=null,v=>v.decision='sim']) {
     const v = verdict(input);mutate(v);assert.throws(()=>validateJudgment(v,input));
   }
-  await assert.rejects(callJudge(input,{model:'fixture',apiKey:'fixture',fetchImpl:async()=>({ok:true,json:async()=>({choices:[{message:{content:'bad JSON'}}]})})}));
+  const invalid=await callJudge(input,{model:'fixture',apiKey:'fixture',fetchImpl:async()=>({ok:true,json:async()=>({choices:[{message:{content:'bad JSON'}}]})})});
+  assert.equal(invalid.unavailable.reason,'INVALID_JUDGE_RESPONSE');assert.equal(invalid.judgment,undefined);
 });
 
 test('judge input excludes old rankings, scores, participant lists and ranking reasons',async()=>{
@@ -106,6 +107,34 @@ test('actual model adapter preserves raw unsupported response and cache replay c
   assert.ok(result[0].diagnostics.validationWarnings.length);
   assert.equal(Object.values(cache)[0].rawJudgment.standalone.evidence[0].quote,'Não está na transcrição');
   assert.deepEqual(await rerank(snapshot,{cache,judge}),result);assert.equal(calls,1);
+});
+
+test('all model content failures are cached as unavailable without blocking the next candidate',async()=>{
+  const snapshot=fixture(8);let calls=0;
+  const judge=async input=>callJudge(input,{model:'fixture',apiKey:'fixture',fetchImpl:async()=>{
+    const raw=verdict(input),index=Number(input.startSeconds)/100;calls++;
+    if(index===1)raw.decision='Resposta inválida';
+    if(index===2)delete raw.standalone;
+    if(index===3)raw.contextDependence.score=9;
+    if(index===4)raw.universality.evidence='invalid schema';
+    const content=index===5?'broken JSON':index===6?'':JSON.stringify(raw);
+    return {ok:true,json:async()=>({choices:[{message:{content}}],usage:{total_tokens:10}})};
+  }});
+  const first=await runExperiment(snapshot,{judge});
+  assert.equal(first.status,'completed');assert.deepEqual(first.ranked.map(c=>c.key),['c0','c7']);
+  assert.equal(first.coverage.unavailable.length,6);assert.equal(first.coverage.eligible,2);
+  assert.equal(first.metrics.v9.acceptanceAt10,null);
+  assert.ok(first.coverage.unavailable.every(c=>c.decision===null&&c.clipWorthiness===null));
+  assert.equal(Object.keys(first.cache).length,8);assert.equal(calls,8);
+  assert.ok(Object.values(first.cache).filter(c=>c.unavailable).every(c=>typeof c.rawResponse==='string'));
+  const again=await runExperiment(snapshot,{cache:first.cache,judge});
+  assert.equal(calls,8);assert.deepEqual(again.coverage,first.coverage);assert.deepEqual(again.ranked,first.ranked);
+});
+
+test('transport and HTTP errors still stop without inventing unavailable model output',async()=>{
+  const snapshot=fixture(1),input=judgeInput(snapshot.candidates[0],snapshot.chunks);
+  await assert.rejects(callJudge(input,{model:'fixture',apiKey:'fixture',fetchImpl:async()=>({ok:false,status:429})}),/HTTP 429/);
+  await assert.rejects(callJudge(input,{model:'fixture',apiKey:'fixture',fetchImpl:async()=>{throw new Error('network')}}),/network/);
 });
 
 test('failure preserves successful cache, resume spends only remaining calls, model/input changes invalidate cache',async()=>{
